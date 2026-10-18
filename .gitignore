@@ -1,0 +1,16 @@
+build/
+.rag/
+models/*
+!models/bge-small-en-v1.5
+models/bge-small-en-v1.5/*
+!models/bge-small-en-v1.5/model.json
+third_party/*
+!third_party/README.md
+compile_commands.json
+*.db
+*.db-wal
+*.db-shm
+indexes/
+eval/*.local.jsonl
+.cache/
+note.md

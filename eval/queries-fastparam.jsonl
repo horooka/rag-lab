@@ -1,0 +1,24 @@
+{"query": "read controllers from a binary configuration file", "relevant": ["src/BinDataStruct.cpp"]}
+{"query": "load all parameter trees for the machines", "relevant": ["src/BinDataStruct.cpp"]}
+{"query": "look up a parameter by its identifier", "relevant": ["src/BinDataStruct.cpp"]}
+{"query": "read station names from Stations.ini", "relevant": ["src/StationNames.cpp"]}
+{"query": "get the station id by station name", "relevant": ["src/StationNames.cpp"]}
+{"query": "select parameters from a tree child", "relevant": ["src/ParamSelect.cpp"]}
+{"query": "convert internal parameter data into a passport", "relevant": ["src/ParamSelect.cpp"]}
+{"query": "list control parameters for a controller", "relevant": ["src/ParamSelect.cpp"]}
+{"query": "create lookup indexes for controllers", "relevant": ["src/BinDataStruct.cpp"]}
+{"query": "read parameter archive information", "relevant": ["src/BinDataStruct.cpp"]}
+{"query": "load a dynamic parameter value", "relevant": ["src/BinDataStruct.cpp"]}
+{"query": "recursively read tree children from a file", "relevant": ["src/BinDataStruct.cpp"]}
+{"query": "initialize all machines", "relevant": ["src/BinDataStruct.cpp"]}
+{"query": "split a parameter path into segments", "relevant": ["src/FastParamMain.cpp"]}
+{"query": "KLogic and alarm parameter type constants", "relevant": ["include/FastParamConst.h"]}
+{"query": "current position tree structure", "relevant": ["include/FastParamTypes.h"]}
+{"query": "binary archive GUID structure", "relevant": ["include/BinDataStruct.h"]}
+{"query": "station name translation helper functions", "relevant": ["src/FastParamMain.cpp"]}
+{"query": "LoadAllParamsTree", "relevant": ["src/BinDataStruct.cpp"]}
+{"query": "GetDynParam", "relevant": ["src/BinDataStruct.cpp"]}
+{"query": "GetStationNameById", "relevant": ["src/StationNames.cpp"]}
+{"query": "params_list_control", "relevant": ["src/ParamSelect.cpp"]}
+{"query": "StParamArchive", "relevant": ["include/BinDataStruct.h"]}
+{"query": "TCurrentPos", "relevant": ["include/FastParamTypes.h"]}

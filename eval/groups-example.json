@@ -1,0 +1,18 @@
+[
+  {
+    "label": "networking",
+    "keywords": ["network", "socket", "packet", "rtp", "connection", "udp"]
+  },
+  {
+    "label": "database",
+    "keywords": ["database", "sql", "query", "transaction", "table", "firebird"]
+  },
+  {
+    "label": "configuration",
+    "keywords": ["config", "settings", "option", "parameter", "ini", "xml"]
+  },
+  {
+    "label": "user-interface",
+    "keywords": ["button", "dialog", "window", "widget", "menu"]
+  }
+]
