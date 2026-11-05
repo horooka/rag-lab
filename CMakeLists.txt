@@ -14,6 +14,7 @@ endif()
 
 find_package(SQLite3 REQUIRED)
 find_package(Threads REQUIRED)
+find_package(Iconv REQUIRED)
 
 if(TARGET SQLite3::SQLite3)
     set(RAG_SQLITE_TARGET SQLite3::SQLite3)
@@ -31,6 +32,7 @@ set(RAG_REQUIRED_THIRD_PARTY
     third_party/tree-sitter-c/src/parser.c
     third_party/tree-sitter-cpp/src/parser.c
     third_party/tree-sitter-python/src/parser.c
+    third_party/tree-sitter-pascal/src/parser.c
     third_party/sqlite-vec/sqlite-vec.c
     third_party/CLI11/CLI/CLI.hpp
     third_party/nlohmann/nlohmann/json.hpp
@@ -64,6 +66,11 @@ add_library(treesitter_python STATIC
     third_party/tree-sitter-python/src/parser.c
     third_party/tree-sitter-python/src/scanner.c)
 target_include_directories(treesitter_python PRIVATE third_party/tree-sitter-python/src)
+
+add_library(treesitter_pascal STATIC
+    third_party/tree-sitter-pascal/src/parser.c)
+target_include_directories(treesitter_pascal
+    PRIVATE third_party/tree-sitter-pascal/src)
 
 add_library(sqlite_vec STATIC third_party/sqlite-vec/sqlite-vec.c)
 target_compile_definitions(sqlite_vec PRIVATE SQLITE_CORE SQLITE_VEC_STATIC)
@@ -99,6 +106,7 @@ set_target_properties(rag_embed PROPERTIES
 # ---------------------------------------------------------------------------
 add_library(rag_core STATIC
     src/config.cpp
+    src/encoding.cpp
     src/source.cpp
     src/tree_sitter_chunker.cpp
     src/markdown_chunker.cpp
@@ -106,7 +114,8 @@ add_library(rag_core STATIC
     src/sqlite_store.cpp
     src/indexer.cpp
     src/search.cpp
-    src/eval.cpp)
+    src/eval.cpp
+    src/workspace.cpp)
 
 target_include_directories(rag_core
     PUBLIC include
@@ -114,6 +123,7 @@ target_include_directories(rag_core
             third_party/tree-sitter-c/bindings
             third_party/tree-sitter-cpp/bindings
             third_party/tree-sitter-python/bindings
+            third_party/tree-sitter-pascal/bindings
             third_party/CLI11
             third_party/nlohmann
             third_party/sqlite-vec)
@@ -131,8 +141,10 @@ target_link_libraries(rag_core
             treesitter_c
             treesitter_cpp
             treesitter_python
+            treesitter_pascal
             sqlite_vec
-            Threads::Threads)
+            Threads::Threads
+            Iconv::Iconv)
 
 set_target_properties(rag_core PROPERTIES
     BUILD_RPATH "${RAG_ORT_DIR}/lib"

@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "rag/encoding.hpp"
 #include "rag/types.hpp"
 
 namespace rag {
@@ -20,7 +21,8 @@ public:
     FilesystemSource(std::filesystem::path root,
                      std::vector<std::string> exclude_globs = {},
                      bool include_docs = true,
-                     int max_file_bytes = 5 * 1024 * 1024);
+                     int max_file_bytes = 5 * 1024 * 1024,
+                     EncodingRules encodings = {});
 
     std::vector<SourceFile> scan() override;
     std::string read(const SourceFile& file) override;
@@ -36,6 +38,7 @@ private:
     std::vector<std::string> exclude_globs_;
     bool include_docs_;
     int max_file_bytes_;
+    EncodingRules encodings_;
     mutable std::vector<std::pair<std::string, std::string>> repo_cache_;
 };
 

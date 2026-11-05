@@ -24,6 +24,27 @@ Searcher::Searcher(Store& store, Embedder& embedder, SearchOptions options)
 
 SearchResult Searcher::search(const std::string& query) {
     SearchResult result;
+    if (trim(query).empty()) {
+        return result;
+    }
+    const bool use_dense = options_.mode != "bm25";
+    std::vector<float> query_embedding;
+    double embed_ms = 0.0;
+    if (use_dense) {
+        const auto embed_start = std::chrono::steady_clock::now();
+        query_embedding = embedder_.embed_query(query);
+        embed_ms = elapsed_ms(embed_start);
+    }
+    result = search_with_embedding(query, query_embedding);
+    result.embed_ms = embed_ms;
+    result.total_ms += embed_ms;
+    return result;
+}
+
+SearchResult Searcher::search_with_embedding(
+    const std::string& query,
+    const std::vector<float>& query_embedding) {
+    SearchResult result;
     const auto total_start = std::chrono::steady_clock::now();
     if (trim(query).empty()) {
         result.total_ms = elapsed_ms(total_start);
@@ -39,13 +60,6 @@ SearchResult Searcher::search(const std::string& query) {
                              options_.filters.before_ns.has_value();
     const int candidate_k =
         std::max(options_.candidate_k, options_.k) * (has_filters ? 5 : 1);
-
-    std::vector<float> query_embedding;
-    if (use_dense) {
-        const auto embed_start = std::chrono::steady_clock::now();
-        query_embedding = embedder_.embed_query(query);
-        result.embed_ms = elapsed_ms(embed_start);
-    }
 
     std::vector<RankedId> dense;
     if (use_dense) {

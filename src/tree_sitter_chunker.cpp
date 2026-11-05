@@ -5,11 +5,14 @@
 #include <iterator>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
+#include <cctype>
 
 #include <tree_sitter/api.h>
 
 #include "tree-sitter-c.h"
 #include "tree-sitter-cpp.h"
+#include "tree-sitter-pascal.h"
 #include "tree-sitter-python.h"
 #include "rag/util.hpp"
 
@@ -25,6 +28,8 @@ const TSLanguage* language_for(Lang lang) {
             return tree_sitter_cpp();
         case Lang::Python:
             return tree_sitter_python();
+        case Lang::Pascal:
+            return tree_sitter_pascal();
         default:
             return nullptr;
     }
@@ -46,6 +51,11 @@ bool is_unit_type(Lang lang, const char* type) {
                t == "struct_specifier" || t == "union_specifier" ||
                t == "enum_specifier" || t == "template_declaration" ||
                t == "type_definition";
+    }
+    if (lang == Lang::Pascal) {
+        return t == "defProc" || t == "declProc" || t == "declType" ||
+               t == "declClass" || t == "declIntf" || t == "declConst" ||
+               t == "declUses";
     }
     return false;
 }
@@ -112,6 +122,18 @@ std::string declarator_name(std::string_view content, TSNode node,
 
 std::string symbol_for(std::string_view content, TSNode node) {
     const std::string_view type(ts_node_type(node));
+    if (type == "defProc") {
+        TSNode header = ts_node_child_by_field_name(node, "header", 6);
+        if (!ts_node_is_null(header)) {
+            return symbol_for(content, header);
+        }
+    }
+    if (type == "declUses") {
+        return "uses";
+    }
+    if (type == "declClass" || type == "declIntf") {
+        return {};
+    }
     if (type == "decorated_definition" || type == "template_declaration") {
         const uint32_t count = ts_node_named_child_count(node);
         for (uint32_t i = 0; i < count; ++i) {
@@ -142,8 +164,24 @@ std::string symbol_for(std::string_view content, TSNode node) {
     return {};
 }
 
-std::string kind_for(TSNode node) {
+std::string kind_for(std::string_view content, TSNode node) {
     const std::string_view type(ts_node_type(node));
+    if (type == "defProc") {
+        TSNode header = ts_node_child_by_field_name(node, "header", 6);
+        const std::string text =
+            lower_ascii(node_text(content,
+                                  ts_node_is_null(header) ? node : header));
+        if (text.find("constructor") != std::string::npos) return "constructor";
+        if (text.find("destructor") != std::string::npos) return "destructor";
+        if (text.find("function") != std::string::npos) return "function";
+        return "procedure";
+    }
+    if (type == "declProc") return "declaration";
+    if (type == "declType") return "type";
+    if (type == "declClass") return "class";
+    if (type == "declIntf") return "interface";
+    if (type == "declConst") return "const";
+    if (type == "declUses") return "uses";
     if (type == "function_definition") return "function";
     if (type == "class_specifier" || type == "class_definition") return "class";
     if (type == "struct_specifier") return "struct";
@@ -153,6 +191,22 @@ std::string kind_for(TSNode node) {
     if (type == "template_declaration") return "template";
     if (type == "decorated_definition") return "definition";
     return "declaration";
+}
+
+std::string normalize_pascal_symbol(const std::string& symbol) {
+    std::string out;
+    for (char c : symbol) {
+        if (std::isspace(static_cast<unsigned char>(c))) {
+            continue;
+        }
+        if (c == '.') {
+            out += "::";
+        } else {
+            out.push_back(static_cast<char>(
+                std::tolower(static_cast<unsigned char>(c))));
+        }
+    }
+    return out;
 }
 
 std::vector<std::string> split_lines(std::string_view text) {
@@ -228,6 +282,12 @@ public:
         return {};
     }
 
+    void prepare(TSNode root) {
+        if (lang_ == Lang::Pascal) {
+            collect_pascal_definitions(root);
+        }
+    }
+
     void walk(TSNode node, const std::string& parent_symbol) {
         if (is_unit_type(lang_, ts_node_type(node))) {
             const uint32_t bytes = ts_node_end_byte(node) - ts_node_start_byte(node);
@@ -272,6 +332,19 @@ public:
     std::vector<RawChunk> take() { return std::move(chunks_); }
 
 private:
+    void collect_pascal_definitions(TSNode node) {
+        if (std::strcmp(ts_node_type(node), "defProc") == 0) {
+            const std::string symbol = symbol_for(content_, node);
+            if (!symbol.empty()) {
+                defined_pascal_symbols_.insert(
+                    normalize_pascal_symbol(symbol));
+            }
+        }
+        const uint32_t count = ts_node_named_child_count(node);
+        for (uint32_t i = 0; i < count; ++i) {
+            collect_pascal_definitions(ts_node_named_child(node, i));
+        }
+    }
     std::string qualified(const std::string& parent, TSNode node) const {
         std::string name = symbol_for(content_, node);
         if (name.empty()) {
@@ -312,7 +385,12 @@ private:
 
         RawChunk chunk;
         chunk.symbol = qualified(parent_symbol, node);
-        chunk.kind = kind_for(node);
+        chunk.kind = kind_for(content_, node);
+        if (lang_ == Lang::Pascal && chunk.kind == "declaration" &&
+            defined_pascal_symbols_.count(
+                normalize_pascal_symbol(chunk.symbol)) > 0) {
+            return;
+        }
         chunk.text = std::move(body);
         chunk.start_line = comment_start_row + 1;
         chunk.end_line = static_cast<int>(ts_node_end_point(node).row) + 1;
@@ -323,6 +401,7 @@ private:
     Lang lang_;
     ChunkOptions options_;
     std::vector<RawChunk> chunks_;
+    std::unordered_set<std::string> defined_pascal_symbols_;
 };
 
 }  // namespace
@@ -342,11 +421,15 @@ struct TreeSitterChunker::Impl {
         if (it != parsers.end()) {
             return it->second;
         }
+        const TSLanguage* language = language_for(lang);
+        if (!language) {
+            return nullptr;
+        }
         TSParser* parser = ts_parser_new();
         if (!parser) {
             return nullptr;
         }
-        if (!ts_parser_set_language(parser, language_for(lang))) {
+        if (!ts_parser_set_language(parser, language)) {
             ts_parser_delete(parser);
             return nullptr;
         }
@@ -384,6 +467,7 @@ std::vector<RawChunk> TreeSitterChunker::chunk(const SourceFile& file,
 
     TSNode root = ts_tree_root_node(tree);
     AstCollector collector(content, file.lang, impl_->options);
+    collector.prepare(root);
     collector.walk(root, "");
     std::vector<RawChunk> chunks = collector.take();
     ts_tree_delete(tree);

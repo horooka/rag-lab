@@ -5,6 +5,15 @@
   "batch_size": 8,
   "threads": 8,
   "include_docs": true,
+  "encoding": "auto",
+  "encodings": [
+    {"match": "*.pas", "encoding": "cp1251"},
+    {"match": "*.dpr", "encoding": "cp1251"},
+    {"match": "*.dpk", "encoding": "cp1251"},
+    {"match": "*.lpr", "encoding": "cp1251"},
+    {"match": "*.dfm", "encoding": "cp1251"},
+    {"match": "*.inc", "encoding": "cp1251"}
+  ],
   "exclude": [
     "build/*",
     "*/build/*",
@@ -27,6 +36,9 @@
     {"match": "*.cpp", "type": "treesitter", "max_tokens": 512},
     {"match": "*.hpp", "type": "treesitter", "max_tokens": 512},
     {"match": "*.py", "type": "treesitter", "max_tokens": 512},
+    {"match": "*.pas", "type": "treesitter", "max_tokens": 512},
+    {"match": "*.dpr", "type": "treesitter", "max_tokens": 512},
+    {"match": "*.dpk", "type": "treesitter", "max_tokens": 512},
     {"match": "CMakeLists.txt", "type": "window", "window_lines": 80, "overlap_lines": 8},
     {"match": "*", "type": "window", "window_lines": 60, "overlap_lines": 12}
   ]

@@ -81,7 +81,8 @@ std::unique_ptr<Chunker> make_chunker_registry(
     if (profiles.empty()) {
         const std::vector<std::string> source_extensions = {
             "*.c",   "*.h",   "*.cc",  "*.cpp", "*.cxx", "*.hpp",
-            "*.hh",  "*.hxx", "*.inl", "*.ipp", "*.py",  "*.pyi"};
+            "*.hh",  "*.hxx", "*.inl", "*.ipp", "*.py",  "*.pyi",
+            "*.pas", "*.dpr", "*.dpk", "*.lpr"};
         for (const auto& pattern : source_extensions) {
             ChunkerProfile profile;
             profile.match = pattern;

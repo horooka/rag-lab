@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "rag/encoding.hpp"
 #include "rag/types.hpp"
 
 namespace rag {
@@ -37,6 +38,8 @@ struct Config {
     int threads = 0;  // 0 = ONNX Runtime default
     ChunkOptions chunk;
     std::vector<ChunkerProfile> chunker_profiles;
+    std::vector<EncodingRule> encoding_rules;
+    std::string default_encoding = "auto";
     std::vector<std::string> exclude_globs;
     bool include_docs = true;
     int max_file_bytes = 5 * 1024 * 1024;

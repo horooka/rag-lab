@@ -1,0 +1,6 @@
+{
+  "indexes": [
+    {"name": "delphi", "db": "../indexes/kaskad.db"},
+    {"name": "cpp", "db": "../indexes/ksp.db"}
+  ]
+}

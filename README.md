@@ -5,11 +5,17 @@ evaluation. It includes semantic code search over local source trees, plus
 in-memory semantic grouping. C++17 core, CPU-only embeddings, SQLite index,
 hybrid dense + BM25 retrieval, and a small retrieval-evaluation harness.
 
+## License
+
+Original code is dedicated to the public domain under CC0 1.0 Universal; see
+`LICENSE`. Third-party components keep their own licenses and attribution
+requirements; see `THIRD_PARTY_NOTICES.md`.
+
 ## Requirements
 
 - Linux, CMake ≥ 3.22, a C++17 compiler (tested with GCC 16)
 - SQLite ≥ 3.35 with FTS5 (`libsqlite3-dev`)
-- `curl`, `tar`
+- `curl`, `tar`, `iconv` (glibc provides it)
 - ~50 MB of fetched sources, ONNX Runtime and the model; ~15 GB RAM is plenty
 
 All third-party sources (tree-sitter, sqlite-vec, CLI11, nlohmann/json, ONNX
@@ -72,6 +78,57 @@ trusted:
 ./build/rag index /path/to/large-tree --db indexes/tree.db \
     --model-dir models/bge-small-en-v1.5 --threads 8 --batch-size 16
 ```
+
+## Workspaces: multiple indexes
+
+Keep one index per root and let the query layer merge them. This avoids path
+collisions, cross-root stale deletion, and schema migrations, while still
+allowing different encoding/chunker settings per project.
+
+```bash
+./build/rag index /path/to/delphi --db indexes/delphi.db \
+    --model-dir models/bge-small-en-v1.5
+
+./build/rag index /path/to/cpp --db indexes/cpp.db \
+    --model-dir models/bge-small-en-v1.5
+```
+
+`examples/workspace.json`:
+
+```json
+{
+  "indexes": [
+    {"name": "delphi", "db": "../indexes/delphi.db"},
+    {"name": "cpp", "db": "../indexes/cpp.db"}
+  ]
+}
+```
+
+```bash
+./build/rag search "FillStationsList" --workspace examples/workspace.json
+./build/rag stats --workspace examples/workspace.json
+```
+
+Each hit is tagged with its source, so two indexes containing
+`src/foo.cpp` stay distinguishable:
+
+```
+1. [delphi] StationID.pas:20-22  TStation.FillStationsList
+2. [cpp] src/stations_ini.cpp:44-58  parse_stations_ini
+```
+
+Details:
+
+- `db` paths are resolved relative to the workspace file.
+- The compact map form `{"indexes": {"delphi": "delphi.db"}}` is also accepted.
+- All indexes must use the same embedding model and dimension for dense/hybrid
+  search; the workspace validates this before querying.
+- `--source NAME` restricts a workspace query to one index.
+- `--db` and `--workspace` are mutually exclusive.
+- `stats --workspace` prints per-index statistics and aggregate totals.
+- A future `rag port <symbol>` will use the same workspace list.
+- There is intentionally no `source_id` in the index schema: isolation is per
+  database, merging is a query-layer concern.
 
 ## Utils
 
@@ -208,6 +265,7 @@ Line spans include blank lines inside a chunk.
 | `--batch-size N` | embedding batch size |
 | `--window-lines N`, `--overlap-lines N` | fallback text windows |
 | `--max-tokens N` | approximate chunk budget (default 512) |
+| `--encoding NAME` | fallback encoding for non-UTF-8 files (`auto` by default) |
 | `--quiet` | no per-file progress |
 
 Default exclusions cover VCS metadata, build trees, virtualenvs,
@@ -222,8 +280,10 @@ skipped.
 | `--mode hybrid\|dense\|bm25` | retrieval strategy (default `hybrid`) |
 | `-k, --top-k N` | result count (default 10) |
 | `--repo NAME` | repository filter |
-| `--lang cpp\|python\|c\|text` | language filter |
+| `--lang cpp\|python\|c\|pascal\|text` | language filter |
 | `--path PREFIX` | relative path prefix filter |
+| `--workspace FILE` | query multiple named indexes |
+| `--source NAME` | restrict a workspace query to one index |
 | `--after ISO` | only files modified at/after this UTC time |
 | `--before ISO` | only files modified at/before this UTC time |
 | `--dense-weight W`, `--bm25-weight W` | override adaptive RRF weights |
@@ -244,6 +304,38 @@ file at index time. Date-only values mean 00:00 UTC. Indexes created before mtim
 nanoseconds must be rebuilt with `--full` once. Filtered dense retrieval scans
 the matching subset and ranks it directly, so a narrow date window cannot
 silently lose candidates to KNN pre-filtering.
+
+### `rag resolve <symbol>`
+
+Resolves a symbol across one index or a workspace. It partitions the hits into:
+
+- **definitions** — exact symbol matches, including qualified forms
+  (`TStation.FillStationsList` when resolving `FillStationsList`);
+- **references** — chunks whose text contains the symbol (approximate call
+  sites/declarations);
+- **candidates** — related chunks from other sources/languages, useful for
+  finding an analogue such as `fill_project_stations`.
+
+```bash
+./build/rag resolve FillStationsList \
+    --workspace examples/workspace.json --source delphi
+
+./build/rag resolve FillStationsList \
+    --workspace examples/workspace.json --json
+```
+
+| option | meaning |
+|---|---|
+| `--workspace FILE` | resolve across named indexes |
+| `--db PATH` | resolve in one index |
+| `--source NAME` | workspace index filter |
+| `--lang`, `--repo`, `--path` | metadata filters |
+| `--after`, `--before` | file mtime filters |
+| `-k, --top-k N` | hits per section (default 20) |
+| `--json` | structured output |
+
+Manifest-aware status (`done` / `partial` / `todo`) will be added once the
+manifest TSV chunker exists.
 
 ### `rag stats`
 
@@ -297,19 +389,50 @@ Chunker profiles are evaluated in order and matched against both the relative
 path and the bare file name, so `*.md` and `CMakeLists.txt` both work. The
 built-in types are:
 
-- `treesitter` — AST chunks for C, C++ and Python (also the fallback for
-  unsupported languages inside that chunker);
+- `treesitter` — AST chunks for C, C++, Python and Pascal (also the fallback
+  for unsupported languages inside that chunker);
 - `markdown` — heading sections with hierarchical symbols such as
   `Intro > Setup`, ignoring `#` inside fenced code blocks;
 - `window` — overlapping line windows for scripts, build files and unknown
   formats.
 
-When `chunkers` is omitted, the defaults map C/C++/Python files to tree-sitter,
-Markdown/RST to the heading chunker, and everything else to line windows.
+When `chunkers` is omitted, the defaults map C/C++/Python/Pascal files to
+tree-sitter, Markdown/RST to the heading chunker, and everything else to line
+windows.
 Profiles can override `max_tokens`, `window_lines` and `overlap_lines`
 individually. `exclude` patterns without `/` match any path component; patterns 
 with `/` match the relative path. Excluding vendored XML parsers is a good first
 move on projects that embed third-party headers.
+
+### Source encoding
+
+Decoding happens in the `Source` layer, before chunking or embedding. Every
+source returns UTF-8; downstream code never sees cp1251/UTF-16 bytes.
+
+- Valid UTF-8 passes through unchanged.
+- A UTF-8 BOM is stripped.
+- UTF-16 LE/BE files with a BOM are converted.
+- Otherwise the first matching `encodings` rule is used; the default rules
+  treat Delphi/Pascal extensions (`.pas`, `.dpr`, `.dpk`, `.lpr`, `.dfm`,
+  `.inc`) as cp1251.
+- If no rule matches and the file is not UTF-8, indexing reports the file and
+  suggests configuring an encoding.
+
+```json
+{
+  "encoding": "auto",
+  "encodings": [
+    {"match": "*.pas", "encoding": "cp1251"},
+    {"match": "*.dpr", "encoding": "cp1251"},
+    {"match": "*.cpp", "encoding": "utf-8"}
+  ]
+}
+```
+
+`--encoding cp1251` sets the global fallback for a single `rag index` run.
+Encoding rules are evaluated in order and matched against the relative path and
+file name. `auto` means “do not guess”: a non-UTF-8 file without a matching
+rule is an error rather than silent mojibake.
 
 ## Embedding models
 
