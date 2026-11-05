@@ -7,7 +7,7 @@
 
 namespace rag {
 
-enum class Lang { Unknown, C, Cpp, Python, Text };
+enum class Lang { Unknown, C, Cpp, Python, Pascal, Text };
 
 const char* lang_name(Lang lang);
 Lang lang_from_path(const std::string& path);
@@ -50,6 +50,7 @@ struct ChunkEmbedding {
 
 struct SearchHit {
     Chunk chunk;
+    std::string source;  // workspace index name; empty for single-db search
     double score = 0.0;
     double dense_score = 0.0;
     double bm25_score = 0.0;
@@ -61,6 +62,7 @@ struct SearchFilters {
     std::string repo;
     std::string lang;
     std::string path_prefix;
+    std::string source;  // workspace index name
     std::optional<int64_t> after_ns;   // inclusive file mtime lower bound
     std::optional<int64_t> before_ns;  // inclusive file mtime upper bound
 };

@@ -3,7 +3,7 @@
 The actual sources are not versioned in this repository. They are downloaded
 into this directory by `scripts/fetch-deps.sh` using the versions pinned there:
 
-- tree-sitter runtime and the C, C++ and Python grammars
+- tree-sitter runtime and the C, C++, Python and Pascal grammars
 - sqlite-vec
 - CLI11
 - nlohmann/json

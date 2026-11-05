@@ -77,6 +77,20 @@ Config load_config(const std::filesystem::path& root) {
             config.exclude_globs.push_back(item.get<std::string>());
         }
     }
+    if (json.contains("encoding")) {
+        config.default_encoding = json["encoding"].get<std::string>();
+    }
+    if (json.contains("encodings") && json["encodings"].is_array()) {
+        for (const auto& item : json["encodings"]) {
+            EncodingRule rule;
+            rule.match = item.at("match").get<std::string>();
+            rule.encoding = item.at("encoding").get<std::string>();
+            if (rule.match.empty()) {
+                throw std::runtime_error("encoding rule has empty match");
+            }
+            config.encoding_rules.push_back(std::move(rule));
+        }
+    }
     if (json.contains("chunkers") && json["chunkers"].is_array()) {
         for (const auto& item : json["chunkers"]) {
             ChunkerProfile profile;

@@ -56,13 +56,14 @@ fetch_grammar() {
     local name="$1"
     local version="$2"
     local directory="$3"
+    local owner="${4:-tree-sitter}"
     local dest="$THIRD/${directory}"
     local marker="${dest}/src/parser.c"
     if [[ "$FORCE" -eq 0 && -f "$marker" ]]; then
         return
     fi
     fetch_archive "${directory}-${version}" \
-        "https://github.com/tree-sitter/${directory}/archive/refs/tags/v${version}.tar.gz"
+        "https://github.com/${owner}/${directory}/archive/refs/tags/v${version}.tar.gz"
     rm -rf "$dest"
     mkdir -p "${dest}/src/tree_sitter" "${dest}/bindings"
     cp "$EXTRACTED/src/parser.c" "${dest}/src/"
@@ -83,6 +84,7 @@ fetch_grammar() {
 fetch_grammar "c" "0.24.2" "tree-sitter-c"
 fetch_grammar "cpp" "0.23.4" "tree-sitter-cpp"
 fetch_grammar "python" "0.25.0" "tree-sitter-python"
+fetch_grammar "pascal" "0.10.2" "tree-sitter-pascal" "Isopod"
 
 # ---------------------------------------------------------------------------
 # sqlite-vec

@@ -10,6 +10,7 @@ are pinned in that script.
 | tree-sitter-c | 0.24.2 | MIT | https://github.com/tree-sitter/tree-sitter-c |
 | tree-sitter-cpp | 0.23.4 | MIT | https://github.com/tree-sitter/tree-sitter-cpp |
 | tree-sitter-python | 0.25.0 | MIT | https://github.com/tree-sitter/tree-sitter-python |
+| tree-sitter-pascal | 0.10.2 | MIT | https://github.com/Isopod/tree-sitter-pascal |
 | sqlite-vec | 0.1.9 | MIT OR Apache-2.0 | https://github.com/asg017/sqlite-vec |
 | CLI11 | 2.7.2 | BSD-3-Clause | https://github.com/CLIUtils/CLI11 |
 | nlohmann/json | 3.12.0 | MIT | https://github.com/nlohmann/json |

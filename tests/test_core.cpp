@@ -1,18 +1,23 @@
 #include <cassert>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
 
 #include "coverage/coverage.hpp"
 #include "rag/chunker.hpp"
+#include "rag/encoding.hpp"
 #include "rag/eval.hpp"
 #include "rag/search.hpp"
+#include "rag/source.hpp"
 #include "rag/tokenizer.hpp"
 #include "rag/types.hpp"
 #include "rag/util.hpp"
 
 #include <string_view>
+#include <unistd.h>
 
 namespace {
 
@@ -107,6 +112,82 @@ int main() { return 0; }
     if (!windows.empty()) {
         expect(windows.front().start_line == 1, "first window starts at line 1");
     }
+}
+
+void test_pascal_chunker() {
+    const std::string content = R"(unit StationID;
+
+interface
+
+uses SysUtils, IniFiles;
+
+type
+  TStation = class
+    procedure FillStationsList;
+    function GetName: string;
+  end;
+
+const
+  StationCount = 10;
+
+procedure FillStationsList;
+
+implementation
+
+// comment before the definition
+procedure TStation.FillStationsList;
+begin
+end;
+
+function TStation.GetName: string;
+begin
+  Result := 'Station';
+end;
+
+procedure FillStationsList;
+begin
+end;
+
+end.
+)";
+    rag::ChunkOptions options;
+    rag::TreeSitterChunker chunker(options);
+    rag::SourceFile file;
+    file.rel_path = "StationID.pas";
+    file.lang = rag::Lang::Pascal;
+    auto chunks = chunker.chunk(file, content);
+    expect(!chunks.empty(), "Pascal chunker returns chunks");
+
+    bool uses = false;
+    bool type = false;
+    bool constant = false;
+    bool method = false;
+    bool function = false;
+    int top_level_definitions = 0;
+    int declarations = 0;
+    for (const auto& chunk : chunks) {
+        if (chunk.kind == "uses" && chunk.symbol == "uses") uses = true;
+        if (chunk.kind == "type" && chunk.symbol == "TStation") type = true;
+        if (chunk.kind == "const" && chunk.symbol == "StationCount") {
+            constant = true;
+        }
+        if (chunk.symbol == "TStation.FillStationsList") method = true;
+        if (chunk.symbol == "TStation.GetName" &&
+            chunk.kind == "function") {
+            function = true;
+        }
+        if (chunk.symbol == "FillStationsList") ++top_level_definitions;
+        if (chunk.kind == "declaration") ++declarations;
+    }
+    expect(uses, "Pascal uses chunk");
+    expect(type, "Pascal type chunk");
+    expect(constant, "Pascal const chunk");
+    expect(method, "Pascal method definition chunk");
+    expect(function, "Pascal function definition chunk");
+    expect(top_level_definitions == 1,
+           "interface declaration is deduplicated against implementation");
+    expect(declarations == 0 || top_level_definitions == 1,
+           "no duplicate Pascal declarations");
 }
 
 void test_markdown_and_registry() {
@@ -283,6 +364,66 @@ void test_coverage() {
            "line ownership respects similarity and overlap");
 }
 
+void test_encoding() {
+    expect(rag::is_valid_utf8("hello"), "ASCII is valid UTF-8");
+    expect(rag::is_valid_utf8("\xC3\xA9"), "accented UTF-8 is valid");
+    expect(!rag::is_valid_utf8(std::string("\xFF", 1)),
+           "lone 0xFF is invalid UTF-8");
+
+    rag::EncodingRules rules;
+    rules.add("*.pas", "cp1251");
+    rules.set_fallback("auto");
+
+    const std::string cp1251("\xCF\xF0\xE8\xE2\xE5\xF2", 6);
+    const std::string expected(
+        "\xD0\x9F\xD1\x80\xD0\xB8\xD0\xB2\xD0\xB5\xD1\x82", 12);
+    expect(rag::decode_source(cp1251, "unit.pas", rules) == expected,
+           "cp1251 is decoded to UTF-8");
+    expect(rag::decode_source("\xEF\xBB\xBFhi", "x.txt", rules) == "hi",
+           "UTF-8 BOM is stripped");
+    expect(rag::decode_source(std::string("\xFF\xFEh\x00i\x00", 6), "x.txt", rules) == "hi",
+           "UTF-16LE BOM is converted");
+    expect(rag::decode_source("plain", "x.cpp", rules) == "plain",
+           "valid UTF-8 passes through");
+    expect(!rag::FilesystemSource::looks_binary(
+               std::string("\xFF\xFEh\x00", 4)),
+           "UTF-16LE is not treated as binary");
+    expect(rag::FilesystemSource::looks_binary(std::string("a\0b", 3)),
+           "NUL bytes still mark binary data");
+
+    bool threw = false;
+    try {
+        rag::decode_source(std::string("\xFF", 1), "x.cpp", rules);
+    } catch (const std::exception&) {
+        threw = true;
+    }
+    expect(threw, "undecodable file without a rule is rejected");
+
+    const std::filesystem::path directory =
+        std::filesystem::temp_directory_path() /
+        ("rag_encoding_" + std::to_string(::getpid()));
+    std::filesystem::remove_all(directory);
+    std::filesystem::create_directories(directory);
+    {
+        std::ofstream out(directory / "unit.pas", std::ios::binary);
+        out.write(cp1251.data(), static_cast<std::streamsize>(cp1251.size()));
+    }
+    rag::FilesystemSource source(directory, {}, true, 5 * 1024 * 1024, rules);
+    auto files = source.scan();
+    bool saw_pascal = false;
+    for (const auto& file : files) {
+        if (file.rel_path == "unit.pas") {
+            saw_pascal = true;
+            expect(file.lang == rag::Lang::Pascal,
+                   "Pascal extension maps to Lang::Pascal");
+            expect(source.read(file) == expected,
+                   "FilesystemSource returns decoded UTF-8");
+        }
+    }
+    expect(saw_pascal, "cp1251 Pascal file is scanned");
+    std::filesystem::remove_all(directory);
+}
+
 void test_iso_time() {
     expect(rag::parse_iso8601_utc("1970-01-01") == 0,
            "Unix epoch parses to zero");
@@ -305,9 +446,11 @@ int main() {
     test_tokenizer();
     test_chunker();
     test_markdown_and_registry();
+    test_pascal_chunker();
     test_rrf();
     test_reference_matching();
     test_coverage();
+    test_encoding();
     test_iso_time();
     test_wildcard();
     if (failures) {

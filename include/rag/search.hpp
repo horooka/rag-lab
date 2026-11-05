@@ -32,6 +32,9 @@ public:
     Searcher(Store& store, Embedder& embedder, SearchOptions options);
 
     SearchResult search(const std::string& query);
+    SearchResult search_with_embedding(
+        const std::string& query,
+        const std::vector<float>& query_embedding);
     SearchOptions& options() { return options_; }
 
     // Reciprocal-rank fusion. Ranks are 1-based; missing ranks are ignored.

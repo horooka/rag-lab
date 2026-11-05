@@ -611,7 +611,54 @@ class SqliteStore final : public Store {
             return chunks;
         }
 
-        std::vector<ChunkEmbedding> all_chunks() override {
+        std::vector<Chunk> chunks_in_range(
+        const std::string& path, int start_line, int end_line,
+        int limit) override {
+        std::vector<Chunk> chunks;
+        if (limit <= 0) {
+            return chunks;
+        }
+        std::string sql =
+            "SELECT c.id, c.file_id, c.path, c.repo, c.lang, c.symbol, "
+            "c.kind, c.start_line, c.end_line, f.mtime_ns, c.text "
+            "FROM chunks c JOIN files f ON f.id = c.file_id "
+            "WHERE c.path = ?";
+        if (start_line > 0) {
+            sql += " AND c.end_line >= ?";
+        }
+        if (end_line > 0) {
+            sql += " AND c.start_line <= ?";
+        }
+        sql += " ORDER BY c.start_line LIMIT ?;";
+        Statement stmt(db_, sql);
+        int index = 1;
+        stmt.bind(index++, path);
+        if (start_line > 0) {
+            stmt.bind(index++, static_cast<int64_t>(start_line));
+        }
+        if (end_line > 0) {
+            stmt.bind(index++, static_cast<int64_t>(end_line));
+        }
+        stmt.bind(index++, static_cast<int64_t>(limit));
+        while (stmt.step()) {
+            Chunk chunk;
+            chunk.id = stmt.int64(0);
+            chunk.file_id = stmt.int64(1);
+            chunk.path = stmt.text(2);
+            chunk.repo = stmt.text(3);
+            chunk.lang = stmt.text(4);
+            chunk.symbol = stmt.text(5);
+            chunk.kind = stmt.text(6);
+            chunk.start_line = static_cast<int>(stmt.int64(7));
+            chunk.end_line = static_cast<int>(stmt.int64(8));
+            chunk.mtime_ns = stmt.int64(9);
+            chunk.text = stmt.text(10);
+            chunks.push_back(std::move(chunk));
+        }
+        return chunks;
+    }
+
+    std::vector<ChunkEmbedding> all_chunks() override {
             std::vector<ChunkEmbedding> result;
             Statement stmt(
                 db_,

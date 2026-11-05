@@ -64,6 +64,11 @@ public:
         const SearchFilters& filters = {}) = 0;
     virtual std::vector<Chunk> chunks_by_ids(
         const std::vector<int64_t>& ids) = 0;
+    // Chunks for a path overlapping [start_line, end_line]. A zero bound is
+    // unbounded. Results are ordered by start line.
+    virtual std::vector<Chunk> chunks_in_range(
+        const std::string& path, int start_line, int end_line,
+        int limit) = 0;
     virtual std::vector<ChunkEmbedding> all_chunks() = 0;
 
     virtual IndexStats stats() = 0;

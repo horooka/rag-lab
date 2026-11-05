@@ -6,6 +6,7 @@
 #include <set>
 #include <unordered_set>
 
+#include "rag/encoding.hpp"
 #include "rag/util.hpp"
 
 namespace rag {
@@ -30,7 +31,8 @@ bool is_source_ext(const std::string& ext) {
         ".c",   ".h",    ".cc",   ".cpp",  ".cxx", ".hpp", ".hh",
         ".hxx", ".inl",  ".ipp",  ".py",   ".pyi", ".ts",  ".tsx",
         ".js",  ".jsx",  ".m",    ".mm",   ".rs",  ".go",  ".java",
-        ".kt",  ".cs",   ".swift"};
+        ".kt",  ".cs",   ".swift", ".pas",  ".dpr", ".dpk", ".lpr",
+        ".dfm", ".inc"};
     return exts.count(ext) > 0;
 }
 
@@ -73,6 +75,8 @@ const char* lang_name(Lang lang) {
             return "cpp";
         case Lang::Python:
             return "python";
+        case Lang::Pascal:
+            return "pascal";
         case Lang::Text:
             return "text";
         default:
@@ -94,6 +98,11 @@ Lang lang_from_path(const std::string& path) {
     if (ends_with(lower, ".py") || ends_with(lower, ".pyi")) {
         return Lang::Python;
     }
+    for (const char* ext : {".pas", ".dpr", ".dpk", ".lpr", ".dfm"}) {
+        if (ends_with(lower, ext)) {
+            return Lang::Pascal;
+        }
+    }
     if (is_source_ext(std::filesystem::path(lower).extension().string()) ||
         is_doc_ext(std::filesystem::path(lower).extension().string()) ||
         is_known_filename(std::filesystem::path(path).filename().string())) {
@@ -104,11 +113,13 @@ Lang lang_from_path(const std::string& path) {
 
 FilesystemSource::FilesystemSource(std::filesystem::path root,
                                    std::vector<std::string> exclude_globs,
-                                   bool include_docs, int max_file_bytes)
+                                   bool include_docs, int max_file_bytes,
+                                   EncodingRules encodings)
     : root_(std::filesystem::absolute(std::move(root))),
       exclude_globs_(std::move(exclude_globs)),
       include_docs_(include_docs),
-      max_file_bytes_(max_file_bytes) {}
+      max_file_bytes_(max_file_bytes),
+      encodings_(std::move(encodings)) {}
 
 bool FilesystemSource::excluded(const std::string& rel_path,
                                 bool is_dir) const {
@@ -260,7 +271,8 @@ std::vector<SourceFile> FilesystemSource::scan() {
 }
 
 std::string FilesystemSource::read(const SourceFile& file) {
-    std::string content = read_file(file.abs_path);
+    std::string content =
+        decode_source(read_file(file.abs_path), file.rel_path, encodings_);
     // Normalize CRLF so tree-sitter byte offsets and line numbers agree.
     std::string out;
     out.reserve(content.size());
@@ -275,6 +287,11 @@ std::string FilesystemSource::read(const SourceFile& file) {
 }
 
 bool FilesystemSource::looks_binary(const std::string& content) {
+    // UTF-16 has NUL bytes by design; let decode_source handle BOM'd files.
+    if (starts_with(content, "\xFF\xFE") ||
+        starts_with(content, "\xFE\xFF")) {
+        return false;
+    }
     return content.find('\0') != std::string::npos;
 }
 
