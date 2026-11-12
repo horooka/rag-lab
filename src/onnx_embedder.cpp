@@ -41,7 +41,8 @@ EmbeddingModelSpec load_model_spec(const std::filesystem::path& model_dir) {
     if (!std::filesystem::exists(model_dir / spec.onnx_file, ec)) {
         throw std::runtime_error("embedding model not found: " +
                                  (model_dir / spec.onnx_file).string() +
-                                 "\nRun scripts/fetch-deps.sh or pass --model-dir.");
+                                 "\nReconfigure with -DRAG_FETCH_DEPS=ON or pass "
+                                 "--model-dir.");
     }
     if (!std::filesystem::exists(model_dir / spec.vocab_file, ec)) {
         throw std::runtime_error("tokenizer vocab not found: " +

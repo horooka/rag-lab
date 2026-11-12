@@ -32,7 +32,7 @@ bool is_source_ext(const std::string& ext) {
         ".hxx", ".inl",  ".ipp",  ".py",   ".pyi", ".ts",  ".tsx",
         ".js",  ".jsx",  ".m",    ".mm",   ".rs",  ".go",  ".java",
         ".kt",  ".cs",   ".swift", ".pas",  ".dpr", ".dpk", ".lpr",
-        ".dfm", ".inc"};
+        ".dfm", ".inc", ".luau", ".lua"};
     return exts.count(ext) > 0;
 }
 
@@ -77,11 +77,31 @@ const char* lang_name(Lang lang) {
             return "python";
         case Lang::Pascal:
             return "pascal";
+        case Lang::Luau:
+            return "luau";
+        case Lang::Rust:
+            return "rust";
         case Lang::Text:
             return "text";
         default:
             return "unknown";
     }
+}
+
+std::optional<Lang> lang_from_name(std::string_view name) {
+    const std::string value = lower_ascii(trim(name));
+    if (value.empty()) {
+        return std::nullopt;
+    }
+    if (value == "c") return Lang::C;
+    if (value == "cpp" || value == "c++") return Lang::Cpp;
+    if (value == "python" || value == "py") return Lang::Python;
+    if (value == "pascal" || value == "pas" || value == "delphi") {
+        return Lang::Pascal;
+    }
+    if (value == "luau" || value == "lua") return Lang::Luau;
+    if (value == "rust" || value == "rs") return Lang::Rust;
+    return std::nullopt;
 }
 
 Lang lang_from_path(const std::string& path) {
@@ -102,6 +122,12 @@ Lang lang_from_path(const std::string& path) {
         if (ends_with(lower, ext)) {
             return Lang::Pascal;
         }
+    }
+    if (ends_with(lower, ".luau")) {
+        return Lang::Luau;
+    }
+    if (ends_with(lower, ".rs")) {
+        return Lang::Rust;
     }
     if (is_source_ext(std::filesystem::path(lower).extension().string()) ||
         is_doc_ext(std::filesystem::path(lower).extension().string()) ||

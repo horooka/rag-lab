@@ -3,14 +3,18 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace rag {
 
-enum class Lang { Unknown, C, Cpp, Python, Pascal, Text };
+enum class Lang { Unknown, C, Cpp, Python, Pascal, Luau, Rust, Text };
 
 const char* lang_name(Lang lang);
 Lang lang_from_path(const std::string& path);
+// Empty -> nullopt (infer from extension). Unknown names also return nullopt;
+// the chunker registry turns that into a configuration error.
+std::optional<Lang> lang_from_name(std::string_view name);
 
 struct SourceFile {
     std::string abs_path;
@@ -24,6 +28,7 @@ struct SourceFile {
 struct RawChunk {
     std::string symbol;
     std::string kind;  // function, method, class, header, window
+    Lang lang = Lang::Unknown;  // effective grammar, if overridden
     std::string text;
     int start_line = 0;
     int end_line = 0;

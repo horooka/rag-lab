@@ -1,7 +1,9 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <csignal>
 #include <ctime>
+#include <thread>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
@@ -27,6 +29,12 @@
 namespace {
 
 using namespace rag;
+
+volatile std::sig_atomic_t g_watch_stop = 0;
+
+void handle_watch_signal(int) {
+    g_watch_stop = 1;
+}
 
 constexpr const char *kVersion = "0.1.0";
 
@@ -161,6 +169,85 @@ int run_index(const CommonOptions &common, const std::string &model_dir_opt,
               << "  elapsed:   " << std::fixed << std::setprecision(2)
               << result.seconds << " s\n";
     return result.failed > 0 ? 2 : 0;
+}
+
+std::string watch_clock() {
+    const std::time_t now = std::time(nullptr);
+    std::tm local{};
+    localtime_r(&now, &local);
+    char buffer[16];
+    std::strftime(buffer, sizeof(buffer), "%H:%M:%S", &local);
+    return buffer;
+}
+
+int run_watch(const CommonOptions& common, const std::string& model_dir_opt,
+              int threads, int batch_size, int window_lines,
+              int overlap_lines, int max_tokens, const std::string& encoding,
+              const std::vector<std::string>& excludes, bool full,
+              int interval_seconds, bool no_initial) {
+    Config config = make_config(common, model_dir_opt, threads, batch_size,
+                                window_lines, overlap_lines, max_tokens,
+                                excludes);
+    if (!encoding.empty()) {
+        config.default_encoding = encoding;
+    }
+    EncodingRules encodings;
+    for (const auto& rule : config.encoding_rules) {
+        encodings.add(rule.match, rule.encoding);
+    }
+    encodings.add_defaults();
+    encodings.set_fallback(config.default_encoding);
+
+    FilesystemSource source(config.root, config.exclude_globs,
+                            config.include_docs, config.max_file_bytes,
+                            encodings);
+    auto chunker =
+        make_chunker_registry(config.chunk, config.chunker_profiles);
+    auto embedder =
+        make_onnx_embedder(config.model_dir, config.batch_size, config.threads);
+    auto store = open_sqlite_store(config.db_path);
+    Indexer indexer(config, source, *chunker, *embedder, *store);
+
+    auto print_summary = [](const IndexResult& result) {
+        std::cout << "[" << watch_clock() << "] added " << result.added
+                  << "  updated " << result.updated << "  unchanged "
+                  << result.unchanged << "  removed " << result.removed
+                  << "  chunks " << result.chunks_written << "  failed "
+                  << result.failed << "  " << std::fixed
+                  << std::setprecision(2) << result.seconds << "s\n"
+                  << std::flush;
+    };
+
+    if (!no_initial) {
+        IndexResult result = indexer.run(full, true);
+        print_summary(result);
+    }
+
+    g_watch_stop = 0;
+    std::signal(SIGINT, handle_watch_signal);
+    std::signal(SIGTERM, handle_watch_signal);
+    std::cout << "watching " << config.root.string() << " every "
+              << interval_seconds << "s (Ctrl-C to stop)\n" << std::flush;
+
+    while (g_watch_stop == 0) {
+        for (int i = 0; i < interval_seconds * 10 && g_watch_stop == 0; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        if (g_watch_stop != 0) {
+            break;
+        }
+        try {
+            IndexResult result = indexer.run(false, true);
+            if (result.added > 0 || result.updated > 0 ||
+                result.removed > 0 || result.failed > 0) {
+                print_summary(result);
+            }
+        } catch (const std::exception& error) {
+            std::cerr << "watch: " << error.what() << "\n";
+        }
+    }
+    std::cout << "watch stopped\n";
+    return 0;
 }
 
 SearchResult execute_query(const CommonOptions &common,
@@ -451,7 +538,7 @@ int run_resolve(const CommonOptions &common, const std::string &workspace_path,
 }
 
 int run_stats(const CommonOptions &common, const std::string &workspace_path,
-              const std::string &model_dir_opt, int threads, bool json_output) {
+              bool json_output) {
     if (!workspace_path.empty()) {
         if (!common.db.empty()) {
             throw std::runtime_error(
@@ -499,11 +586,9 @@ int run_stats(const CommonOptions &common, const std::string &workspace_path,
         return 0;
     }
 
-    Config config =
-        make_config(common, model_dir_opt, threads, 0, 0, -1, 0, {});
-    auto embedder =
-        make_onnx_embedder(config.model_dir, config.batch_size, config.threads);
-    auto store = open_index(config, *embedder);
+    Config config = make_config(common, "", 0, 0, 0, -1, 0, {});
+    require_index(config.db_path);
+    auto store = open_sqlite_store(config.db_path);
     IndexStats stats = store->stats();
 
     if (json_output) {
@@ -666,6 +751,45 @@ int main(int argc, char **argv) {
     index->add_flag("--full", full, "Drop and rebuild the index");
     index->add_flag("--quiet", quiet, "Suppress per-file progress");
 
+    auto *watch = app.add_subcommand(
+        "watch", "Watch a tree and update the index incrementally");
+    std::string watch_path;
+    std::string watch_db;
+    std::string watch_model;
+    int watch_threads = 0;
+    int watch_batch = 0;
+    int watch_window_lines = 0;
+    int watch_overlap_lines = -1;
+    int watch_max_tokens = 0;
+    std::string watch_encoding;
+    std::vector<std::string> watch_excludes;
+    bool watch_full = false;
+    int watch_interval = 2;
+    bool watch_no_initial = false;
+    watch->add_option("path", watch_path, "Project or tree to watch")
+        ->required();
+    watch->add_option("--db", watch_db, "Index database path");
+    watch->add_option("--model-dir", watch_model, "Embedding model directory");
+    watch->add_option("--threads", watch_threads,
+                      "ONNX Runtime threads (0=auto)");
+    watch->add_option("--batch-size", watch_batch, "Embedding batch size");
+    watch->add_option("--window-lines", watch_window_lines,
+                      "Fallback window size");
+    watch->add_option("--overlap-lines", watch_overlap_lines,
+                      "Fallback window overlap");
+    watch->add_option("--max-tokens", watch_max_tokens,
+                      "Max tokens per chunk");
+    watch->add_option("--encoding", watch_encoding,
+                      "Fallback encoding for non-UTF-8 sources");
+    watch->add_option("--exclude", watch_excludes,
+                      "Additional exclude glob (repeatable)");
+    watch->add_option("--interval", watch_interval,
+                      "Poll interval in seconds")
+        ->check(CLI::Range(1, 3600));
+    watch->add_flag("--full", watch_full, "Full rebuild before watching");
+    watch->add_flag("--no-initial", watch_no_initial,
+                    "Do not index before entering the watch loop");
+
     auto *search = app.add_subcommand("search", "Search the index");
     std::string query;
     std::string search_root = ".";
@@ -760,16 +884,11 @@ int main(int argc, char **argv) {
     std::string stats_root = ".";
     std::string stats_db;
     std::string stats_workspace;
-    std::string stats_model;
-    int stats_threads = 0;
     bool stats_json = false;
     stats->add_option("--root", stats_root, "Indexed root (default: cwd)");
     stats->add_option("--db", stats_db, "Index database path");
     stats->add_option("--workspace", stats_workspace,
                       "Workspace JSON with multiple named indexes");
-    stats->add_option("--model-dir", stats_model, "Embedding model directory");
-    stats->add_option("--threads", stats_threads,
-                      "ONNX Runtime threads (0=auto)");
     stats->add_flag("--json", stats_json, "Print JSON");
 
     auto *eval = app.add_subcommand("eval", "Evaluate retrieval quality");
@@ -807,6 +926,15 @@ int main(int argc, char **argv) {
                              window_lines, overlap_lines, max_tokens, encoding,
                              excludes, full, quiet);
         }
+        if (*watch) {
+            CommonOptions options;
+            options.root = watch_path;
+            options.db = watch_db;
+            return run_watch(options, watch_model, watch_threads, watch_batch,
+                             watch_window_lines, watch_overlap_lines,
+                             watch_max_tokens, watch_encoding, watch_excludes,
+                             watch_full, watch_interval, watch_no_initial);
+        }
         if (*search) {
             CommonOptions options;
             options.root = search_root;
@@ -831,8 +959,7 @@ int main(int argc, char **argv) {
             CommonOptions options;
             options.root = stats_root;
             options.db = stats_db;
-            return run_stats(options, stats_workspace, stats_model,
-                             stats_threads, stats_json);
+            return run_stats(options, stats_workspace, stats_json);
         }
         if (*eval) {
             CommonOptions options;

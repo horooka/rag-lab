@@ -22,7 +22,9 @@ public:
 // failures) fall back to overlapping line windows.
 class TreeSitterChunker : public Chunker {
 public:
-    explicit TreeSitterChunker(ChunkOptions options);
+    explicit TreeSitterChunker(
+        ChunkOptions options,
+        std::optional<Lang> language = std::nullopt);
     ~TreeSitterChunker() override;
 
     std::vector<RawChunk> chunk(const SourceFile& file,
@@ -92,5 +94,9 @@ private:
 std::unique_ptr<Chunker> make_chunker_registry(
     const ChunkOptions& options,
     const std::vector<ChunkerProfile>& profiles);
+
+// True when the grammar was enabled via RAG_TS_LANGUAGES and compiled into
+// this build.
+bool treesitter_language_available(Lang language);
 
 }  // namespace rag

@@ -25,52 +25,118 @@ endif()
 set(RAG_DEFAULT_MODEL_DIR "${CMAKE_SOURCE_DIR}/models/bge-small-en-v1.5"
     CACHE PATH "Default embedding model directory")
 set(RAG_ORT_DIR "${CMAKE_SOURCE_DIR}/third_party/onnxruntime"
-    CACHE PATH "ONNX Runtime installation (fetched by scripts/fetch-deps.sh)")
+    CACHE PATH "ONNX Runtime installation")
+set(RAG_FETCH_DEPS ON CACHE BOOL
+    "Run scripts/fetch-deps.sh during configure")
 
+# ---------------------------------------------------------------------------
+# Enabled tree-sitter grammars
+# ---------------------------------------------------------------------------
+set(RAG_TS_LANGUAGES "c;cpp;python;pascal;luau;rust" CACHE STRING
+    "Semicolon-separated tree-sitter grammars to fetch and build")
+list(REMOVE_DUPLICATES RAG_TS_LANGUAGES)
+if(NOT RAG_TS_LANGUAGES)
+    message(FATAL_ERROR "RAG_TS_LANGUAGES must not be empty")
+endif()
+
+set(RAG_TS_TARGETS "")
+set(RAG_TS_BINDING_DIRS "")
+set(RAG_TS_DEFINITIONS "")
 set(RAG_REQUIRED_THIRD_PARTY
     third_party/tree-sitter/lib/src/lib.c
-    third_party/tree-sitter-c/src/parser.c
-    third_party/tree-sitter-cpp/src/parser.c
-    third_party/tree-sitter-python/src/parser.c
-    third_party/tree-sitter-pascal/src/parser.c
     third_party/sqlite-vec/sqlite-vec.c
     third_party/CLI11/CLI/CLI.hpp
     third_party/nlohmann/nlohmann/json.hpp
     third_party/onnxruntime/include/onnxruntime_cxx_api.h)
 
-foreach(required IN LISTS RAG_REQUIRED_THIRD_PARTY)
-    if(NOT EXISTS "${CMAKE_SOURCE_DIR}/${required}")
-        message(FATAL_ERROR
-            "Missing ${required}.\n"
-            "Run scripts/fetch-deps.sh (or scripts/fetch-deps.sh --force) first.")
+foreach(language IN LISTS RAG_TS_LANGUAGES)
+    string(TOLOWER "${language}" language)
+    if(language STREQUAL "c")
+        set(ts_dir "tree-sitter-c")
+        set(ts_scanner "")
+    elseif(language STREQUAL "cpp")
+        set(ts_dir "tree-sitter-cpp")
+        set(ts_scanner "scanner.c")
+    elseif(language STREQUAL "python")
+        set(ts_dir "tree-sitter-python")
+        set(ts_scanner "scanner.c")
+    elseif(language STREQUAL "pascal")
+        set(ts_dir "tree-sitter-pascal")
+        set(ts_scanner "")
+    elseif(language STREQUAL "luau")
+        set(ts_dir "tree-sitter-luau")
+        set(ts_scanner "scanner.c")
+    elseif(language STREQUAL "rust")
+        set(ts_dir "tree-sitter-rust")
+        set(ts_scanner "scanner.c")
+    else()
+        message(FATAL_ERROR "Unknown tree-sitter language: ${language}")
+    endif()
+
+    set(RAG_TS_DIR_${language} "third_party/${ts_dir}")
+    set(RAG_TS_SCANNER_${language} "${ts_scanner}")
+    list(APPEND RAG_TS_TARGETS "treesitter_${language}")
+    list(APPEND RAG_TS_BINDING_DIRS
+        "${CMAKE_SOURCE_DIR}/third_party/${ts_dir}/bindings")
+    string(TOUPPER "${language}" upper_language)
+    list(APPEND RAG_TS_DEFINITIONS "RAG_TS_LANG_${upper_language}=1")
+    list(APPEND RAG_REQUIRED_THIRD_PARTY
+        "third_party/${ts_dir}/src/parser.c")
+    if(ts_scanner)
+        list(APPEND RAG_REQUIRED_THIRD_PARTY
+            "third_party/${ts_dir}/src/${ts_scanner}")
     endif()
 endforeach()
 
 # ---------------------------------------------------------------------------
-# Vendored third-party C libraries
+# Fetch dependencies (before CMake verifies their presence)
+# ---------------------------------------------------------------------------
+string(REPLACE ";" "," RAG_TS_LANGUAGES_ARG "${RAG_TS_LANGUAGES}")
+if(RAG_FETCH_DEPS)
+    find_program(BASH_PROGRAM bash REQUIRED)
+    message(STATUS "Fetching dependencies for: ${RAG_TS_LANGUAGES_ARG}")
+    execute_process(
+        COMMAND "${BASH_PROGRAM}" "${CMAKE_SOURCE_DIR}/scripts/fetch-deps.sh"
+                --languages "${RAG_TS_LANGUAGES_ARG}"
+        RESULT_VARIABLE RAG_FETCH_RESULT)
+    if(NOT RAG_FETCH_RESULT EQUAL 0)
+        message(FATAL_ERROR
+            "scripts/fetch-deps.sh failed with exit code ${RAG_FETCH_RESULT}")
+    endif()
+endif()
+
+foreach(required IN LISTS RAG_REQUIRED_THIRD_PARTY)
+    if(NOT EXISTS "${CMAKE_SOURCE_DIR}/${required}")
+        message(FATAL_ERROR
+            "Missing ${required}.\n"
+            "Run scripts/fetch-deps.sh --languages ${RAG_TS_LANGUAGES_ARG}, "
+            "or configure with -DRAG_FETCH_DEPS=ON.")
+    endif()
+endforeach()
+
+# ---------------------------------------------------------------------------
+# Third-party C targets
 # ---------------------------------------------------------------------------
 add_library(tree_sitter STATIC third_party/tree-sitter/lib/src/lib.c)
 target_include_directories(tree_sitter
     PUBLIC third_party/tree-sitter/include
     PRIVATE third_party/tree-sitter/lib/src)
 
-add_library(treesitter_c STATIC third_party/tree-sitter-c/src/parser.c)
-target_include_directories(treesitter_c PRIVATE third_party/tree-sitter-c/src)
-
-add_library(treesitter_cpp STATIC
-    third_party/tree-sitter-cpp/src/parser.c
-    third_party/tree-sitter-cpp/src/scanner.c)
-target_include_directories(treesitter_cpp PRIVATE third_party/tree-sitter-cpp/src)
-
-add_library(treesitter_python STATIC
-    third_party/tree-sitter-python/src/parser.c
-    third_party/tree-sitter-python/src/scanner.c)
-target_include_directories(treesitter_python PRIVATE third_party/tree-sitter-python/src)
-
-add_library(treesitter_pascal STATIC
-    third_party/tree-sitter-pascal/src/parser.c)
-target_include_directories(treesitter_pascal
-    PRIVATE third_party/tree-sitter-pascal/src)
+foreach(language IN LISTS RAG_TS_LANGUAGES)
+    string(TOLOWER "${language}" language)
+    set(dir_var "RAG_TS_DIR_${language}")
+    set(scanner_var "RAG_TS_SCANNER_${language}")
+    set(ts_dir "${${dir_var}}")
+    set(ts_scanner "${${scanner_var}}")
+    set(ts_sources "${CMAKE_SOURCE_DIR}/${ts_dir}/src/parser.c")
+    if(ts_scanner)
+        list(APPEND ts_sources
+            "${CMAKE_SOURCE_DIR}/${ts_dir}/src/${ts_scanner}")
+    endif()
+    add_library(treesitter_${language} STATIC ${ts_sources})
+    target_include_directories(treesitter_${language}
+        PRIVATE "${CMAKE_SOURCE_DIR}/${ts_dir}/src")
+endforeach()
 
 add_library(sqlite_vec STATIC third_party/sqlite-vec/sqlite-vec.c)
 target_compile_definitions(sqlite_vec PRIVATE SQLITE_CORE SQLITE_VEC_STATIC)
@@ -84,7 +150,7 @@ set_target_properties(onnxruntime PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${RAG_ORT_DIR}/include")
 
 # ---------------------------------------------------------------------------
-# Embedding support (shared by all apps, no index or retrieval dependencies)
+# Embedding support
 # ---------------------------------------------------------------------------
 add_library(rag_embed STATIC
     src/onnx_embedder.cpp
@@ -121,17 +187,15 @@ add_library(rag_core STATIC
 target_include_directories(rag_core
     PUBLIC include
     PRIVATE src
-            third_party/tree-sitter-c/bindings
-            third_party/tree-sitter-cpp/bindings
-            third_party/tree-sitter-python/bindings
-            third_party/tree-sitter-pascal/bindings
+            ${RAG_TS_BINDING_DIRS}
             third_party/CLI11
             third_party/nlohmann
             third_party/sqlite-vec)
 
 target_compile_definitions(rag_core
     PRIVATE RAG_DEFAULT_MODEL_DIR="${RAG_DEFAULT_MODEL_DIR}"
-            SQLITE_CORE)
+            SQLITE_CORE
+            ${RAG_TS_DEFINITIONS})
 
 target_compile_options(rag_core PRIVATE -Wall -Wextra -Wpedantic)
 
@@ -139,10 +203,7 @@ target_link_libraries(rag_core
     PUBLIC ${RAG_SQLITE_TARGET}
     PRIVATE rag_embed
             tree_sitter
-            treesitter_c
-            treesitter_cpp
-            treesitter_python
-            treesitter_pascal
+            ${RAG_TS_TARGETS}
             sqlite_vec
             Threads::Threads
             Iconv::Iconv)
@@ -152,7 +213,7 @@ set_target_properties(rag_core PROPERTIES
     INSTALL_RPATH "${RAG_ORT_DIR}/lib")
 
 # ---------------------------------------------------------------------------
-# CLI
+# Apps
 # ---------------------------------------------------------------------------
 add_executable(rag apps/rag/main.cpp)
 target_include_directories(rag PRIVATE third_party/CLI11 third_party/nlohmann)
@@ -161,9 +222,6 @@ set_target_properties(rag PROPERTIES
     BUILD_RPATH "${RAG_ORT_DIR}/lib"
     INSTALL_RPATH "$ORIGIN/../lib")
 
-# ---------------------------------------------------------------------------
-# semantic-grouper app
-# ---------------------------------------------------------------------------
 add_library(grouper_core STATIC
     src/grouper_clustering.cpp
     src/grouper_input.cpp)
@@ -180,9 +238,6 @@ set_target_properties(grouper PROPERTIES
     BUILD_RPATH "${RAG_ORT_DIR}/lib"
     INSTALL_RPATH "$ORIGIN/../lib")
 
-# ---------------------------------------------------------------------------
-# MCP stdio server
-# ---------------------------------------------------------------------------
 add_executable(rag_mcp apps/mcp/main.cpp)
 target_include_directories(rag_mcp PRIVATE third_party/CLI11 third_party/nlohmann)
 target_compile_options(rag_mcp PRIVATE -Wall -Wextra -Wpedantic)
@@ -192,9 +247,6 @@ set_target_properties(rag_mcp PROPERTIES
     BUILD_RPATH "${RAG_ORT_DIR}/lib"
     INSTALL_RPATH "$ORIGIN/../lib")
 
-# ---------------------------------------------------------------------------
-# coverage app: how much of the index belongs to supplied semantic groups
-# ---------------------------------------------------------------------------
 add_library(coverage_core STATIC src/coverage.cpp)
 target_include_directories(coverage_core PUBLIC include)
 target_compile_options(coverage_core PRIVATE -Wall -Wextra -Wpedantic)

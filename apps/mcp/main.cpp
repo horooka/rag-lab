@@ -30,11 +30,24 @@ struct ReadChunk {
     Chunk chunk;
 };
 
+std::string derive_project_name(const std::filesystem::path& db_path) {
+    const std::filesystem::path parent = db_path.parent_path();
+    if (parent.filename() == ".rag" && parent.parent_path().has_filename()) {
+        return parent.parent_path().filename().string();
+    }
+    std::string name = db_path.stem().string();
+    if (name.empty()) {
+        name = "index";
+    }
+    return name;
+}
+
 class Backend {
 public:
     Backend(const std::string& workspace_path, const std::string& db_path,
             const std::string& model_dir, const std::string& root,
-            int threads) {
+            const std::string& server_name, int threads)
+        : server_name_(server_name) {
         if (!workspace_path.empty() && !db_path.empty()) {
             throw std::runtime_error(
                 "use either --workspace or --db, not both");
@@ -69,6 +82,13 @@ public:
             embedder_ = make_onnx_embedder(config_.model_dir,
                                            config_.batch_size, threads);
             workspace_->validate_embedder(*embedder_);
+            if (server_name_.empty()) {
+                server_name_ =
+                    std::filesystem::path(workspace_path).stem().string();
+            }
+            if (server_name_.empty()) {
+                server_name_ = "workspace";
+            }
             return;
         }
 
@@ -86,13 +106,16 @@ public:
                 "index model mismatch: index uses '" + model +
                 "', current model is '" + embedder_->spec().name + "'");
         }
-        single_name_ = config_.db_path.stem().string();
-        if (single_name_.empty()) {
-            single_name_ = "index";
+        single_name_ = derive_project_name(config_.db_path);
+        if (!server_name_.empty()) {
+            single_name_ = server_name_;
+        } else {
+            server_name_ = single_name_;
         }
     }
 
     bool is_workspace() const { return workspace_.has_value(); }
+    const std::string& name() const { return server_name_; }
 
     SearchResult search(const std::string& query,
                         const SearchOptions& options) {
@@ -225,6 +248,7 @@ private:
     std::optional<Workspace> workspace_;
     std::unique_ptr<Store> store_;
     std::string single_name_;
+    std::string server_name_;
 };
 
 std::string string_arg(const nlohmann::json& args, const char* name,
@@ -554,7 +578,7 @@ nlohmann::json handle_request(Backend& backend, const nlohmann::json& request) {
         result["protocolVersion"] = version;
         result["capabilities"] = {{"tools", nlohmann::json::object()}};
         result["serverInfo"] = {
-            {"name", "rag-lab"},
+            {"name", backend.name()},
             {"version", kVersion},
         };
         result["instructions"] =
@@ -622,13 +646,14 @@ void send_message(const nlohmann::json& message) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    CLI::App app{"rag-lab MCP stdio server", "rag-mcp"};
+    CLI::App app{"Code RAG MCP stdio server", "rag-mcp"};
     app.set_version_flag("--version", kVersion);
 
     std::string workspace_path;
     std::string db_path;
     std::string model_dir;
     std::string root = ".";
+    std::string server_name;
     int threads = 0;
     bool verbose = false;
     app.add_option("--workspace", workspace_path,
@@ -636,17 +661,20 @@ int main(int argc, char** argv) {
     app.add_option("--db", db_path, "Single index database path");
     app.add_option("--model-dir", model_dir, "Embedding model directory");
     app.add_option("--root", root, "Root used to find .rag/config.json");
+    app.add_option("--name", server_name,
+                   "MCP server name (default: index/workspace project name)");
     app.add_option("--threads", threads, "ONNX Runtime threads (0=auto)");
     app.add_flag("-v,--verbose", verbose, "Log startup information to stderr");
 
     CLI11_PARSE(app, argc, argv);
 
     try {
-        Backend backend(workspace_path, db_path, model_dir, root, threads);
+        Backend backend(workspace_path, db_path, model_dir, root, server_name,
+                        threads);
         if (verbose) {
-            std::cerr << "rag-mcp ready (" << (backend.is_workspace()
-                                                   ? "workspace"
-                                                   : "single index")
+            std::cerr << "rag-mcp ready as '" << backend.name() << "' ("
+                      << (backend.is_workspace() ? "workspace"
+                                                 : "single index")
                       << ")\n";
         }
         std::string line;

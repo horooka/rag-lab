@@ -90,10 +90,17 @@ IndexResult Indexer::run(bool full, bool quiet) {
                 if (state) {
                     store_.delete_file_chunks(state->id);
                 }
+                Lang effective_lang = file.lang;
+                for (const auto& raw : raw_chunks) {
+                    if (raw.lang != Lang::Unknown) {
+                        effective_lang = raw.lang;
+                        break;
+                    }
+                }
                 FileRecord record;
                 record.path = file.rel_path;
                 record.repo = file.repo;
-                record.lang = lang_name(file.lang);
+                record.lang = lang_name(effective_lang);
                 record.mtime_ns = file.mtime_ns;
                 record.size = file.size;
                 record.hash = hash;
@@ -106,7 +113,9 @@ IndexResult Indexer::run(bool full, bool quiet) {
                     chunk.file_id = file_id;
                     chunk.path = file.rel_path;
                     chunk.repo = file.repo;
-                    chunk.lang = lang_name(file.lang);
+                    chunk.lang = lang_name(raw.lang == Lang::Unknown
+                                               ? effective_lang
+                                               : raw.lang);
                     chunk.symbol = raw.symbol;
                     chunk.kind = raw.kind;
                     chunk.start_line = raw.start_line;

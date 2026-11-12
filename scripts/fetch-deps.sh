@@ -9,12 +9,27 @@ ORT_DIR="$THIRD/onnxruntime"
 MODEL_DIR="$ROOT/models/bge-small-en-v1.5"
 
 FORCE=0
-if [[ "${1:-}" == "--force" ]]; then
-    FORCE=1
-elif [[ -n "${1:-}" ]]; then
-    echo "usage: $0 [--force]" >&2
-    exit 1
-fi
+LANGUAGES_ARG=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --force)
+            FORCE=1
+            shift
+            ;;
+        --languages)
+            LANGUAGES_ARG="${2:?--languages needs a value}"
+            shift 2
+            ;;
+        --languages=*)
+            LANGUAGES_ARG="${1#*=}"
+            shift
+            ;;
+        *)
+            echo "usage: $0 [--force] [--languages c,cpp,python,pascal,luau,rust]" >&2
+            exit 1
+            ;;
+    esac
+done
 
 mkdir -p "$THIRD" "$MODEL_DIR"
 TMP="$(mktemp -d)"
@@ -81,10 +96,47 @@ fetch_grammar() {
     cp "$header" "${dest}/bindings/"
 }
 
-fetch_grammar "c" "0.24.2" "tree-sitter-c"
-fetch_grammar "cpp" "0.23.4" "tree-sitter-cpp"
-fetch_grammar "python" "0.25.0" "tree-sitter-python"
-fetch_grammar "pascal" "0.10.2" "tree-sitter-pascal" "Isopod"
+languages=()
+if [[ -n "$LANGUAGES_ARG" ]]; then
+    read -ra languages <<< "${LANGUAGES_ARG//,/ }"
+elif [[ -n "${RAG_TS_LANGUAGES:-}" ]]; then
+    read -ra languages <<< "${RAG_TS_LANGUAGES//,/ }"
+else
+    languages=(c cpp python pascal luau rust)
+fi
+
+if [[ ${#languages[@]} -eq 0 ]]; then
+    echo "error: no tree-sitter languages enabled" >&2
+    exit 1
+fi
+
+for language in "${languages[@]}"; do
+    case "$language" in
+        c)
+            fetch_grammar "c" "0.24.2" "tree-sitter-c"
+            ;;
+        cpp)
+            fetch_grammar "cpp" "0.23.4" "tree-sitter-cpp"
+            ;;
+        python)
+            fetch_grammar "python" "0.25.0" "tree-sitter-python"
+            ;;
+        pascal)
+            fetch_grammar "pascal" "0.10.2" "tree-sitter-pascal" "Isopod"
+            ;;
+        luau)
+            fetch_grammar "luau" "1.2.0" "tree-sitter-luau" \
+                "tree-sitter-grammars"
+            ;;
+        rust)
+            fetch_grammar "rust" "0.24.2" "tree-sitter-rust"
+            ;;
+        *)
+            echo "error: unknown tree-sitter language: $language" >&2
+            exit 1
+            ;;
+    esac
+done
 
 # ---------------------------------------------------------------------------
 # sqlite-vec

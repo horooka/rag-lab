@@ -7,7 +7,7 @@ hybrid dense + BM25 retrieval, and a small retrieval-evaluation harness.
 
 ## License
 
-Original code is dedicated to the public domain under CC0 1.0 Universal; see
+Original code is licensed under the BSD Zero Clause License (0BSD); see
 `LICENSE`. Third-party components keep their own licenses and attribution
 requirements; see `THIRD_PARTY_NOTICES.md`.
 
@@ -19,30 +19,42 @@ requirements; see `THIRD_PARTY_NOTICES.md`.
 - ~60 MB of fetched sources, ONNX Runtime and the model; ~15 GB RAM is plenty
 
 All third-party sources (tree-sitter, sqlite-vec, CLI11, nlohmann/json, ONNX
-Runtime) and the embedding model are fetched by `scripts/fetch-deps.sh` into
-gitignored directories. See `THIRD_PARTY_NOTICES.md`.
+Runtime) and the embedding model are fetched by CMake through
+`scripts/fetch-deps.sh` into gitignored directories. See
+`THIRD_PARTY_NOTICES.md`.
 
 ## Build
 
 ```bash
-./scripts/fetch-deps.sh          # sources, ONNX Runtime and the model
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j8
 ctest --test-dir build --output-on-failure
 ```
 
-The binaries are `build/rag`, `build/grouper`, `build/coverage` and
-`build/rag-mcp`.
-`scripts/fetch-deps.sh` is idempotent; `--force` re-downloads everything. After
-one successful fetch, CMake builds work offline. Dependency licenses are listed
-in `THIRD_PARTY_NOTICES.md`.
+CMake invokes `scripts/fetch-deps.sh` during configure and passes the selected
+tree-sitter language set. The script is idempotent and skips existing files.
+Use `-DRAG_FETCH_DEPS=OFF` when dependencies are already present, or
+`-DRAG_FETCH_DEPS=ON -DRAG_TS_LANGUAGES='c;python;rust'` to fetch/build a subset.
+After one successful configure, builds work offline. Dependency licenses are
+listed in `THIRD_PARTY_NOTICES.md`.
 
-The local project is now `rag-lab`. The git remote still points at the old
-GitHub name until the repository is renamed there:
+### Tree-sitter language set
+
+`RAG_TS_LANGUAGES` is the single knob for fetching and building grammars. It
+defaults to all supported languages. CMake passes the list to
+`scripts/fetch-deps.sh` during configure, and uses the same list for targets and
+compile definitions.
 
 ```bash
-git remote set-url origin https://github.com/horooka/rag-lab.git
+# fetch and build only C, Python and Rust
+cmake -S . -B build -DRAG_TS_LANGUAGES='c;python;rust'
+# calls:
+./scripts/fetch-deps.sh --languages c,python,rust
 ```
+
+Disabled grammars fall back to window chunks. An explicitly configured
+`language` that was not built fails at index startup with a message pointing to
+`RAG_TS_LANGUAGES`. CMake caches the option, clear if needed
 
 ## Quick start
 
@@ -56,8 +68,7 @@ repository:
     --model-dir models/bge-small-en-v1.5 \
     --threads 8 --batch-size 16
 
-./build/rag stats --db indexes/project.db \
-    --model-dir models/bge-small-en-v1.5
+./build/rag stats --db indexes/project.db
 
 ./build/rag search "read controllers from a binary file" \
     --db indexes/project.db \
@@ -108,7 +119,10 @@ allowing different encoding/chunker settings per project.
 ## MCP server
 
 `rag-mcp` is a stdio MCP server over one index or a workspace. Protocol
-messages go to stdout; diagnostics go to stderr.
+messages go to stdout; diagnostics go to stderr. The server name defaults to
+the project name derived from the index path (for example
+`<root>/.rag/index.db` → `<root>`), or the workspace file stem; override it with
+`--name`.
 
 ```bash
 ./build/rag-mcp --workspace /path/to/workspace.json
@@ -302,6 +316,34 @@ Default exclusions cover VCS metadata, build trees, virtualenvs,
 build/configuration files. Files over 5 MB and files containing NUL bytes are
 skipped.
 
+### `rag watch [path]`
+
+Watches a tree and incrementally updates the index when files change. The model,
+chunker registry, encoding rules and store are loaded once; only changed files
+are re-embedded.
+
+```bash
+./build/rag watch /path/to/project \
+    --db indexes/project.db \
+    --model-dir models/bge-small-en-v1.5 \
+    --interval 2
+```
+
+| option | meaning |
+|---|---|
+| `--db PATH` | index database |
+| `--model-dir DIR` | embedding model directory |
+| `--interval N` | poll interval in seconds (default 2) |
+| `--full` | full rebuild before entering the loop |
+| `--no-initial` | skip the initial index pass |
+| `--encoding NAME` | fallback encoding |
+| `--exclude GLOB` | additional exclude pattern |
+| `--threads`, `--batch-size`, `--window-lines`, `--overlap-lines`, `--max-tokens` | indexing tuning |
+
+It uses polling rather than inotify today; it rescans the tree each interval but
+skips unchanged files via `mtime + size + content hash`. Config changes are
+picked up only after restart. Ctrl-C stops cleanly.
+
 ### `rag search <query>`
 
 | option | meaning |
@@ -309,7 +351,7 @@ skipped.
 | `--mode hybrid\|dense\|bm25` | retrieval strategy (default `hybrid`) |
 | `-k, --top-k N` | result count (default 10) |
 | `--repo NAME` | repository filter |
-| `--lang cpp\|python\|c\|pascal\|text` | language filter |
+| `--lang cpp\|python\|c\|pascal\|luau\|rust\|text` | language filter |
 | `--path PREFIX` | relative path prefix filter |
 | `--workspace FILE` | query multiple named indexes |
 | `--source NAME` | restrict a workspace query to one index |
@@ -369,7 +411,8 @@ manifest TSV chunker exists.
 ### `rag stats`
 
 Files, chunks, repositories, languages, model, index timestamp and database
-size. `--json` for scripting.
+size. Reads index metadata only, so no embedding model or ONNX runtime is
+loaded. `--json` for scripting.
 
 ### `rag eval <queries.jsonl>`
 
@@ -418,20 +461,25 @@ Chunker profiles are evaluated in order and matched against both the relative
 path and the bare file name, so `*.md` and `CMakeLists.txt` both work. The
 built-in types are:
 
-- `treesitter` — AST chunks for C, C++, Python and Pascal (also the fallback
-  for unsupported languages inside that chunker);
+- `treesitter` — AST chunks for C, C++, Python, Pascal, Luau and Rust. An
+  optional `language` field overrides the grammar inferred from the extension.
 - `markdown` — heading sections with hierarchical symbols such as
   `Intro > Setup`, ignoring `#` inside fenced code blocks;
 - `window` — overlapping line windows for scripts, build files and unknown
   formats.
 
-When `chunkers` is omitted, the defaults map C/C++/Python/Pascal files to
-tree-sitter, Markdown/RST to the heading chunker, and everything else to line
-windows.
-Profiles can override `max_tokens`, `window_lines` and `overlap_lines`
-individually. `exclude` patterns without `/` match any path component; patterns 
-with `/` match the relative path. Excluding vendored XML parsers is a good first
-move on projects that embed third-party headers.
+Language override examples:
+
+```json
+{"match": "*.lua", "type": "treesitter", "language": "luau", "max_tokens": 400}
+{"match": "*.h",   "type": "treesitter", "language": "c"}
+{"match": "*.inc", "type": "treesitter", "language": "pascal"}
+```
+
+Valid languages are `c`, `cpp`, `python`, `pascal`, `luau` and `rust`; omit `language`
+field to use the extension mapping. Profiles can override `max_tokens`,
+`window_lines` and `overlap_lines` individually. `exclude` patterns without `/`
+match any path component; patterns with `/` match the relative path
 
 ### Source encoding
 

@@ -1,4 +1,4 @@
-build/
+build*/
 .rag/
 models/*
 !models/bge-small-en-v1.5

@@ -10,10 +10,24 @@
 
 #include <tree_sitter/api.h>
 
+#ifdef RAG_TS_LANG_C
 #include "tree-sitter-c.h"
+#endif
+#ifdef RAG_TS_LANG_CPP
 #include "tree-sitter-cpp.h"
+#endif
+#ifdef RAG_TS_LANG_LUAU
+#include "tree-sitter-luau.h"
+#endif
+#ifdef RAG_TS_LANG_PASCAL
 #include "tree-sitter-pascal.h"
+#endif
+#ifdef RAG_TS_LANG_PYTHON
 #include "tree-sitter-python.h"
+#endif
+#ifdef RAG_TS_LANG_RUST
+#include "tree-sitter-rust.h"
+#endif
 #include "rag/util.hpp"
 
 namespace rag {
@@ -22,16 +36,63 @@ namespace {
 
 const TSLanguage* language_for(Lang lang) {
     switch (lang) {
+#ifdef RAG_TS_LANG_C
         case Lang::C:
             return tree_sitter_c();
+#endif
+#ifdef RAG_TS_LANG_CPP
         case Lang::Cpp:
             return tree_sitter_cpp();
+#endif
+#ifdef RAG_TS_LANG_PYTHON
         case Lang::Python:
             return tree_sitter_python();
+#endif
+#ifdef RAG_TS_LANG_PASCAL
         case Lang::Pascal:
             return tree_sitter_pascal();
+#endif
+#ifdef RAG_TS_LANG_LUAU
+        case Lang::Luau:
+            return tree_sitter_luau();
+#endif
+#ifdef RAG_TS_LANG_RUST
+        case Lang::Rust:
+            return tree_sitter_rust();
+#endif
         default:
             return nullptr;
+    }
+}
+
+bool language_available_internal(Lang language) {
+    switch (language) {
+#ifdef RAG_TS_LANG_C
+        case Lang::C:
+            return true;
+#endif
+#ifdef RAG_TS_LANG_CPP
+        case Lang::Cpp:
+            return true;
+#endif
+#ifdef RAG_TS_LANG_PYTHON
+        case Lang::Python:
+            return true;
+#endif
+#ifdef RAG_TS_LANG_PASCAL
+        case Lang::Pascal:
+            return true;
+#endif
+#ifdef RAG_TS_LANG_LUAU
+        case Lang::Luau:
+            return true;
+#endif
+#ifdef RAG_TS_LANG_RUST
+        case Lang::Rust:
+            return true;
+#endif
+        default:
+            return false;
     }
 }
 
@@ -56,6 +117,17 @@ bool is_unit_type(Lang lang, const char* type) {
         return t == "defProc" || t == "declProc" || t == "declType" ||
                t == "declClass" || t == "declIntf" || t == "declConst" ||
                t == "declUses";
+    }
+    if (lang == Lang::Luau) {
+        return t == "function_declaration" || t == "function_definition" ||
+               t == "type_definition";
+    }
+    if (lang == Lang::Rust) {
+        return t == "function_item" || t == "function_signature_item" ||
+               t == "impl_item" || t == "struct_item" || t == "enum_item" ||
+               t == "trait_item" || t == "mod_item" || t == "type_item" ||
+               t == "const_item" || t == "static_item" ||
+               t == "macro_definition";
     }
     return false;
 }
@@ -134,6 +206,34 @@ std::string symbol_for(std::string_view content, TSNode node) {
     if (type == "declClass" || type == "declIntf") {
         return {};
     }
+    if (type == "impl_item") {
+        TSNode target = ts_node_child_by_field_name(node, "type", 4);
+        if (!ts_node_is_null(target)) {
+            return collapse_ws(node_text(content, target));
+        }
+        return {};
+    }
+    if (type == "function_definition") {
+        // Luau anonymous functions assigned to a variable: local x = function.
+        TSNode parent = ts_node_parent(node);
+        while (!ts_node_is_null(parent)) {
+            const std::string_view parent_type(ts_node_type(parent));
+            if (parent_type == "assignment_statement") {
+                const uint32_t count = ts_node_named_child_count(parent);
+                for (uint32_t i = 0; i < count; ++i) {
+                    TSNode child = ts_node_named_child(parent, i);
+                    if (std::strcmp(ts_node_type(child), "variable_list") == 0) {
+                        return collapse_ws(node_text(content, child));
+                    }
+                }
+            }
+            if (parent_type == "function_declaration" ||
+                parent_type == "function_definition") {
+                break;
+            }
+            parent = ts_node_parent(parent);
+        }
+    }
     if (type == "decorated_definition" || type == "template_declaration") {
         const uint32_t count = ts_node_named_child_count(node);
         for (uint32_t i = 0; i < count; ++i) {
@@ -176,6 +276,19 @@ std::string kind_for(std::string_view content, TSNode node) {
         if (text.find("function") != std::string::npos) return "function";
         return "procedure";
     }
+    if (type == "function_declaration" || type == "function_definition" ||
+        type == "function_item" || type == "function_signature_item") {
+        return "function";
+    }
+    if (type == "type_definition" || type == "type_item") return "type";
+    if (type == "impl_item") return "impl";
+    if (type == "struct_item") return "struct";
+    if (type == "enum_item") return "enum";
+    if (type == "trait_item") return "trait";
+    if (type == "mod_item") return "module";
+    if (type == "const_item") return "const";
+    if (type == "static_item") return "static";
+    if (type == "macro_definition") return "macro";
     if (type == "declProc") return "declaration";
     if (type == "declType") return "type";
     if (type == "declClass") return "class";
@@ -406,8 +519,13 @@ private:
 
 }  // namespace
 
+bool treesitter_language_available(Lang language) {
+    return language_available_internal(language);
+}
+
 struct TreeSitterChunker::Impl {
-    explicit Impl(ChunkOptions options) : options(options) {}
+    Impl(ChunkOptions options, std::optional<Lang> language)
+        : options(options), language(language) {}
 
     ~Impl() {
         for (auto& [lang, parser] : parsers) {
@@ -438,43 +556,53 @@ struct TreeSitterChunker::Impl {
     }
 
     ChunkOptions options;
+    std::optional<Lang> language;
     std::unordered_map<Lang, TSParser*> parsers;
 };
 
-TreeSitterChunker::TreeSitterChunker(ChunkOptions options)
-    : impl_(std::make_unique<Impl>(options)) {}
+TreeSitterChunker::TreeSitterChunker(ChunkOptions options,
+                                     std::optional<Lang> language)
+    : impl_(std::make_unique<Impl>(options, language)) {}
 
 TreeSitterChunker::~TreeSitterChunker() = default;
 
 std::vector<RawChunk> TreeSitterChunker::chunk(const SourceFile& file,
                                                std::string_view content) {
-    if (file.lang == Lang::Text || file.lang == Lang::Unknown) {
-        return chunk_lines(content, impl_->options.window_lines,
-                           impl_->options.overlap_lines, file.rel_path);
+    const Lang lang = impl_->language.value_or(file.lang);
+    auto fallback = [&]() {
+        auto chunks = chunk_lines(content, impl_->options.window_lines,
+                                  impl_->options.overlap_lines, file.rel_path);
+        if (lang != Lang::Text && lang != Lang::Unknown) {
+            for (auto& chunk : chunks) {
+                chunk.lang = lang;
+            }
+        }
+        return chunks;
+    };
+
+    if (lang == Lang::Text || lang == Lang::Unknown) {
+        return fallback();
     }
 
-    TSParser* parser = impl_->parser_for(file.lang);
+    TSParser* parser = impl_->parser_for(lang);
     if (!parser) {
-        return chunk_lines(content, impl_->options.window_lines,
-                           impl_->options.overlap_lines, file.rel_path);
+        return fallback();
     }
     TSTree* tree =
         ts_parser_parse_string(parser, nullptr, content.data(), content.size());
     if (!tree) {
-        return chunk_lines(content, impl_->options.window_lines,
-                           impl_->options.overlap_lines, file.rel_path);
+        return fallback();
     }
 
     TSNode root = ts_tree_root_node(tree);
-    AstCollector collector(content, file.lang, impl_->options);
+    AstCollector collector(content, lang, impl_->options);
     collector.prepare(root);
     collector.walk(root, "");
     std::vector<RawChunk> chunks = collector.take();
     ts_tree_delete(tree);
 
     if (chunks.empty()) {
-        return chunk_lines(content, impl_->options.window_lines,
-                           impl_->options.overlap_lines, file.rel_path);
+        return fallback();
     }
 
     std::sort(chunks.begin(), chunks.end(),
@@ -517,6 +645,9 @@ std::vector<RawChunk> TreeSitterChunker::chunk(const SourceFile& file,
         if (!duplicate) {
             deduped.push_back(std::move(chunk));
         }
+    }
+    for (auto& chunk : deduped) {
+        chunk.lang = lang;
     }
     return deduped;
 }

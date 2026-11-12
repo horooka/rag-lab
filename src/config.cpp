@@ -96,6 +96,7 @@ Config load_config(const std::filesystem::path& root) {
             ChunkerProfile profile;
             profile.match = item.at("match").get<std::string>();
             profile.type = item.value("type", "treesitter");
+            profile.language = item.value("language", "");
             profile.max_tokens = item.value("max_tokens", 0);
             profile.window_lines = item.value("window_lines", 0);
             profile.overlap_lines = item.value("overlap_lines", -1);

@@ -21,6 +21,9 @@ struct ChunkerProfile {
     std::string match;
     // treesitter, markdown or window.
     std::string type = "treesitter";
+    // Optional tree-sitter grammar override: c, cpp, python, pascal, luau.
+    // Empty uses the language inferred from the file extension.
+    std::string language;
     // Zero/negative values inherit the global chunk options.
     int max_tokens = 0;
     int window_lines = 0;

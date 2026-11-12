@@ -273,6 +273,177 @@ Call the endpoint.
     expect(!text_chunks.empty(), "registry falls back to window chunker");
 }
 
+void test_treesitter_language_override() {
+    rag::ChunkerProfile profile;
+    profile.match = "*.lua";
+    profile.type = "treesitter";
+    profile.language = "luau";
+    rag::ChunkOptions options;
+    auto registry = rag::make_chunker_registry(options, {profile});
+
+    rag::SourceFile file;
+    file.rel_path = "main.lua";
+    file.lang = rag::Lang::Text;
+    const std::string content = "type Station = { id: number }\n"
+                                "function fillStations() end\n";
+    auto chunks = registry->chunk(file, content);
+    expect(!chunks.empty(), "language override parses .lua as Luau");
+    bool saw_type = false;
+    bool saw_function = false;
+    for (const auto& chunk : chunks) {
+        if (chunk.symbol == "Station" && chunk.lang == rag::Lang::Luau) {
+            saw_type = true;
+        }
+        if (chunk.symbol == "fillStations" &&
+            chunk.lang == rag::Lang::Luau) {
+            saw_function = true;
+        }
+    }
+    expect(saw_type, "language override tags Luau type chunks");
+    expect(saw_function, "language override tags Luau function chunks");
+
+    rag::ChunkerProfile bad;
+    bad.match = "*.lua";
+    bad.type = "treesitter";
+    bad.language = "not-a-language";
+    bool threw = false;
+    try {
+        rag::make_chunker_registry(options, {bad});
+    } catch (const std::exception&) {
+        threw = true;
+    }
+    expect(threw, "unknown tree-sitter language is rejected");
+
+    rag::ChunkerProfile auto_language;
+    auto_language.match = "*.lua";
+    auto_language.type = "treesitter";
+    auto_language.language = "auto";
+    threw = false;
+    try {
+        rag::make_chunker_registry(options, {auto_language});
+    } catch (const std::exception&) {
+        threw = true;
+    }
+    expect(threw, "'auto' is not a reserved language value");
+}
+
+void test_luau_chunker() {
+    const std::string content = R"(--!strict
+local M = {}
+
+export type Station = {
+    id: number,
+    name: string,
+}
+
+function M.fillStations()
+    return true
+end
+
+local function helper()
+    return 1
+end
+
+local handler = function(x: number)
+    return x + 1
+end
+
+return M
+)";
+    rag::ChunkOptions options;
+    rag::TreeSitterChunker chunker(options);
+    rag::SourceFile file;
+    file.rel_path = "main.luau";
+    file.lang = rag::Lang::Luau;
+    auto chunks = chunker.chunk(file, content);
+    expect(!chunks.empty(), "Luau chunker returns chunks");
+
+    bool type = false;
+    bool method = false;
+    bool local_function = false;
+    bool assigned_function = false;
+    for (const auto& chunk : chunks) {
+        if (chunk.kind == "type" && chunk.symbol == "Station") type = true;
+        if (chunk.symbol == "M.fillStations" && chunk.kind == "function") {
+            method = true;
+        }
+        if (chunk.symbol == "helper" && chunk.kind == "function") {
+            local_function = true;
+        }
+        if (chunk.symbol == "handler" && chunk.kind == "function") {
+            assigned_function = true;
+        }
+    }
+    expect(type, "Luau type definition chunk");
+    expect(method, "Luau table method chunk");
+    expect(local_function, "Luau local function chunk");
+    expect(assigned_function, "Luau assigned anonymous function chunk");
+    expect(rag::lang_from_path("main.luau") == rag::Lang::Luau,
+           "Luau extension maps to Lang::Luau");
+    expect(rag::treesitter_language_available(rag::Lang::Luau),
+           "Luau grammar is enabled in the default build");
+    expect(rag::treesitter_language_available(rag::Lang::Rust),
+           "Rust grammar is enabled in the default build");
+}
+
+void test_rust_chunker() {
+    const std::string content = R"(use std::fmt;
+
+/// A station identifier.
+pub struct Station {
+    pub id: u32,
+}
+
+pub enum Kind { A, B }
+
+pub fn top_level() -> bool { true }
+
+impl Station {
+    pub fn fill_stations(&self) -> bool { true }
+}
+
+pub trait Printable {
+    fn print(&self);
+}
+
+impl Printable for Station {
+    fn print(&self) {}
+}
+
+pub const LIMIT: usize = 10;
+
+pub mod helpers {
+    pub fn help() {}
+}
+)";
+    rag::ChunkOptions options;
+    rag::TreeSitterChunker chunker(options);
+    rag::SourceFile file;
+    file.rel_path = "lib.rs";
+    file.lang = rag::Lang::Rust;
+    auto chunks = chunker.chunk(file, content);
+    expect(!chunks.empty(), "Rust chunker returns chunks");
+    bool structure = false;
+    bool function = false;
+    bool implementation = false;
+    bool trait = false;
+    bool module = false;
+    for (const auto& chunk : chunks) {
+        if (chunk.symbol == "Station" && chunk.kind == "struct") structure = true;
+        if (chunk.symbol == "top_level" && chunk.kind == "function") {
+            function = true;
+        }
+        if (chunk.symbol == "Station" && chunk.kind == "impl") implementation = true;
+        if (chunk.symbol == "Printable" && chunk.kind == "trait") trait = true;
+        if (chunk.symbol == "helpers" && chunk.kind == "module") module = true;
+    }
+    expect(structure, "Rust struct chunk");
+    expect(function, "Rust function chunk");
+    expect(implementation, "Rust impl chunk");
+    expect(trait, "Rust trait chunk");
+    expect(module, "Rust module chunk");
+}
+
 void test_rrf() {
     std::vector<rag::RankedId> dense = {{1, 0.1}, {2, 0.2}};
     std::vector<rag::RankedId> bm25 = {{2, 3.0}, {3, 2.0}};
@@ -447,6 +618,9 @@ int main() {
     test_chunker();
     test_markdown_and_registry();
     test_pascal_chunker();
+    test_treesitter_language_override();
+    test_luau_chunker();
+    test_rust_chunker();
     test_rrf();
     test_reference_matching();
     test_coverage();
